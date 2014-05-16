@@ -1,0 +1,67 @@
+#!/bin/sh
+
+
+# there are no spaces allowed in the assignment
+# e.g. "VIP6=3fff::11" is OK but "VIP6 = 3fff::11" is not OK
+
+# change the below to fit your needs :)
+
+VIP6=4041::11			# virtual IP6
+VIP6net=16			# virtual IP6 net bits
+RIP6=3031::/16			# real IP6 network (backends)
+NS=4041::1			# nameserver
+
+# see loaded.config for description
+FIRST_CORE=1
+LAST_CORE=3
+
+nfq_len=1000000
+
+public_NIC=eth0			# interface to outside
+private_NIC=eth0		# interface to real servers
+private_GW=3031::2/16		# gateway for real servers
+
+# IPs of real servers
+
+server6=3031::11		# first IPv6 balanced server
+server6=3031::12		# ...
+server6=3031::13		# ...
+
+# which strategy to use for balancing
+strategy=rr
+
+
+# Now, some script stuff which you probably dont need to change
+
+#modprobe ip6_queue || true
+modprobe nfnetlink_queue || true
+
+ip6tables -P INPUT ACCEPT
+ip6tables -P OUTPUT ACCEPT
+ip6tables -P FORWARD ACCEPT
+
+ip6tables -F
+ip6tables -F -t mangle
+
+iptables -F -t mangle	# also clean IP4 queue's
+iptables -F
+
+ip6tables -t mangle -A PREROUTING -d $NS -p udp --dport 53 -j ACCEPT
+ip6tables -t mangle -A PREROUTING -s $NS -p udp --sport 53 -j ACCEPT
+ip6tables -t mangle -A PREROUTING -p tcp -d $VIP6 -j NFQUEUE --queue-balance $FIRST_CORE:$LAST_CORE
+ip6tables -A FORWARD -d $NS -p udp --dport 53 -j ACCEPT
+ip6tables -A FORWARD -s $RIP6 -p tcp -j NFQUEUE  --queue-balance $FIRST_CORE:$LAST_CORE
+
+
+
+ip -6 addr flush $private_NIC || true
+ip -6 addr flush $public_NIC || true
+ip -6 addr add $VIP6/$VIP6net dev $public_NIC 2>/dev/null || true
+ip -6 addr add $private_GW dev $private_NIC 2>/dev/null || true
+ip -6 route add $RIP6 dev $private_NIC 2>/dev/null || true
+
+ip link set up dev $public_NIC 2>/dev/null || true
+ip link set up dev $private_NIC 2>/dev/null || true
+
+echo 1 > /proc/sys/net/ipv6/conf/all/forwarding
+
